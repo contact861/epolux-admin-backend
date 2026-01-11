@@ -442,5 +442,3 @@ app.post("/create-checkout-session", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
-```
-
