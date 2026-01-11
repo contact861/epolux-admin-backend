@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-const shippo = require("shippo")(process.env.SHIPPO_API_KEY);
+const fetch = require("node-fetch");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -498,6 +498,7 @@ app.post("/shipping/label", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
 
 
