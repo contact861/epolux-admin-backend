@@ -2,13 +2,11 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-const fetch = require("node-fetch");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const cloudinary = require("cloudinary").v2;
-const serverless = require("serverless-http");
 
 const app = express();
 app.use(cors());
@@ -441,90 +439,6 @@ app.post("/create-checkout-session", async (req, res) => {
     res.status(500).json({ error: "Failed to create session" });
   }
 });
-// Shippo: Get shipping rates
-app.post("/shipping/rates", async (req, res) => {
-  try {
-    const { toAddress, weight } = req.body;
-
-    const response = await fetch("https://api.goshippo.com/shipments/", {
-      method: "POST",
-      headers: {
-        "Authorization": `ShippoToken ${process.env.SHIPPO_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        address_from: {
-          name: "EpoLux",
-          street1: "Trzaska cesta 91",
-          city: "Logatec",
-          zip: "1370",
-          country: "SI"
-        },
-        address_to: toAddress,
-        parcels: [
-          {
-            weight: weight,
-            mass_unit: "kg",
-            distance_unit: "cm",
-            height: 10,
-            width: 40,
-            length: 60
-          }
-        ]
-      })
-    });
-
-    const shipment = await response.json();
-    res.json(shipment.rates);
-  } catch (err) {
-    console.error("Shippo REST rates error:", err);
-    res.status(500).json({ error: "Failed to fetch shipping rates" });
-  }
-});
-
-// Shippo: Create shipping label
-app.post("/shipping/label", async (req, res) => {
-  try {
-    const { rateId } = req.body;
-
-    const response = await fetch("https://api.goshippo.com/transactions/", {
-      method: "POST",
-      headers: {
-        "Authorization": `ShippoToken ${process.env.SHIPPO_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        rate: rateId,
-        label_file_type: "PDF",
-        async: false
-      })
-    });
-
-    const transaction = await response.json();
-
-    res.json({
-      labelUrl: transaction.label_url,
-      trackingNumber: transaction.tracking_number,
-      trackingUrl: transaction.tracking_url_provider
-    });
-  } catch (err) {
-    console.error("Shippo REST label error:", err);
-    res.status(500).json({ error: "Failed to create label" });
-  }
-});
 
 // IMPORTANT: Export app for Vercel
-module.exports = serverless(app);
-
-
-
-
-
-
-
-
-
-
-
-
-
+module.exports = app;
