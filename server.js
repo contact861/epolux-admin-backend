@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-// const shippo = require("shippo");
+const shippo = require("shippo")(process.env.SHIPPO_API_KEY);
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -444,19 +444,47 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 // Shippo: Get shipping rates
-// app.post("/shipping/rates", async (req, res) => {
-//   ...
-// });
+app.post("/shipping/rates", async (req, res) => {
+  try {
+    const { toAddress, weight } = req.body;
+
+    const shipment = await shippo.shipment.create({
+      ...
+    });
+
+    res.json(shipment.rates);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch shipping rates" });
+  }
+});
 
 
 // Shippo: Create shipping label
-// app.post("/shipping/label", async (req, res) => {
-//   ...
-// });
+app.post("/shipping/label", async (req, res) => {
+  try {
+    const { rateId } = req.body;
 
+    const transaction = await shippo.transaction.create({
+      rate: rateId,
+      label_file_type: "PDF",
+      async: false
+    });
+
+    res.json({
+      labelUrl: transaction.label_url,
+      trackingNumber: transaction.tracking_number,
+      trackingUrl: transaction.tracking_url_provider
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create label" });
+  }
+});
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
 
 
