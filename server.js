@@ -27,10 +27,6 @@ const productsFile = path.join(dataDir, "products.json");
 if (!fs.existsSync(productsFile)) {
   fs.writeFileSync(productsFile, JSON.stringify([], null, 2));
 }
-const staticProductsFile = path.join(dataDir, "static-products.json");
-if (!fs.existsSync(staticProductsFile)) {
-  fs.writeFileSync(staticProductsFile, JSON.stringify({ hidden: [] }, null, 2));
-}
 // Multer in-memory storage (for Cloudinary)
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -84,25 +80,16 @@ function saveProducts(products) {
     return false;
   }
 }
-// Helper functions for static products visibility
+// Helper functions for static products visibility (in-memory for Vercel)
+let staticProductsData = { hidden: [] };
+
 function getStaticProducts() {
-  try {
-    const data = fs.readFileSync(staticProductsFile, "utf8");
-    return JSON.parse(data);
-  } catch (err) {
-    console.error("Error reading static products:", err);
-    return { hidden: [] };
-  }
+  return staticProductsData;
 }
 
 function saveStaticProducts(data) {
-  try {
-    fs.writeFileSync(staticProductsFile, JSON.stringify(data, null, 2));
-    return true;
-  } catch (err) {
-    console.error("Error saving static products:", err);
-    return false;
-  }
+  staticProductsData = data;
+  return true;
 }
 // Upload to Cloudinary
 function uploadToCloudinary(fileBuffer) {
@@ -376,4 +363,5 @@ app.post("/create-checkout-session", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
