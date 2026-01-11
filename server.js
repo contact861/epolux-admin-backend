@@ -19,14 +19,23 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Products data file
-const dataDir = path.join(__dirname, "data");
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
+// Products data file (use /tmp on Vercel, fallback to data dir locally)
+const isVercel = process.env.VERCEL === "1";
+const dataDir = isVercel ? "/tmp" : path.join(__dirname, "data");
 const productsFile = path.join(dataDir, "products.json");
-if (!fs.existsSync(productsFile)) {
-  fs.writeFileSync(productsFile, JSON.stringify([], null, 2));
+
+// Only try to create directory/files if not on Vercel (Vercel file system is read-only except /tmp)
+if (!isVercel) {
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    if (!fs.existsSync(productsFile)) {
+      fs.writeFileSync(productsFile, JSON.stringify([], null, 2));
+    }
+  } catch (err) {
+    console.warn("Could not initialize data directory:", err.message);
+  }
 }
 
 // Multer in-memory storage (for Cloudinary)
@@ -62,11 +71,19 @@ const authenticate = (req, res, next) => {
   next();
 };
 
-// Helper functions for products.json
+// Helper functions for products.json (in-memory for Vercel, file-based locally)
+let productsData = [];
+
 function getProducts() {
+  if (isVercel) {
+    return productsData;
+  }
   try {
-    const data = fs.readFileSync(productsFile, "utf8");
-    return JSON.parse(data);
+    if (fs.existsSync(productsFile)) {
+      const data = fs.readFileSync(productsFile, "utf8");
+      return JSON.parse(data);
+    }
+    return [];
   } catch (err) {
     console.error("Error reading products:", err);
     return [];
@@ -74,6 +91,10 @@ function getProducts() {
 }
 
 function saveProducts(products) {
+  if (isVercel) {
+    productsData = products;
+    return true;
+  }
   try {
     fs.writeFileSync(productsFile, JSON.stringify(products, null, 2));
     return true;
@@ -422,3 +443,4 @@ app.post("/create-checkout-session", async (req, res) => {
 // IMPORTANT: Export app for Vercel
 module.exports = app;
 ```
+
