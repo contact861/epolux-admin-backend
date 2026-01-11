@@ -5,6 +5,7 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const https = require("https");
 const cloudinary = require("cloudinary").v2;
 
 const app = express();
@@ -27,6 +28,7 @@ const productsFile = path.join(dataDir, "products.json");
 if (!fs.existsSync(productsFile)) {
   fs.writeFileSync(productsFile, JSON.stringify([], null, 2));
 }
+
 // Multer in-memory storage (for Cloudinary)
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -80,6 +82,7 @@ function saveProducts(products) {
     return false;
   }
 }
+
 // Helper functions for static products visibility (in-memory for Vercel)
 let staticProductsData = { hidden: [] };
 
@@ -91,6 +94,7 @@ function saveStaticProducts(data) {
   staticProductsData = data;
   return true;
 }
+
 // Upload to Cloudinary
 function uploadToCloudinary(fileBuffer) {
   return new Promise((resolve, reject) => {
@@ -142,8 +146,9 @@ app.post("/api/admin/login", (req, res) => {
     res.status(401).json({ error: "Invalid password" });
   }
 });
+
 // Translation endpoint (using free MyMemory API)
-app.post("/api/translate", async (req, res) => {
+app.post("/api/translate", (req, res) => {
   try {
     const { text, targetLang } = req.body;
     
@@ -162,22 +167,39 @@ app.post("/api/translate", async (req, res) => {
     const targetCode = langCodes[targetLang] || targetLang;
     
     // Use MyMemory Translation API (free, no API key needed)
-    const response = await fetch(
-      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetCode}`
-    );
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetCode}`;
     
-    const data = await response.json();
-    
-    if (data.responseStatus === 200 && data.responseData && data.responseData.translatedText) {
-      res.json({ translatedText: data.responseData.translatedText });
-    } else {
-      res.status(500).json({ error: "Translation failed" });
-    }
+    https.get(url, (apiRes) => {
+      let data = "";
+      
+      apiRes.on("data", (chunk) => {
+        data += chunk;
+      });
+      
+      apiRes.on("end", () => {
+        try {
+          const parsedData = JSON.parse(data);
+          
+          if (parsedData.responseStatus === 200 && parsedData.responseData && parsedData.responseData.translatedText) {
+            res.json({ translatedText: parsedData.responseData.translatedText });
+          } else {
+            res.status(500).json({ error: "Translation failed" });
+          }
+        } catch (parseErr) {
+          console.error("Error parsing translation response:", parseErr);
+          res.status(500).json({ error: "Translation service error" });
+        }
+      });
+    }).on("error", (err) => {
+      console.error("Translation API error:", err);
+      res.status(500).json({ error: "Translation service error" });
+    });
   } catch (err) {
     console.error("Translation error:", err);
     res.status(500).json({ error: "Translation service error" });
   }
 });
+
 // Get all products
 app.get("/api/products", (req, res) => {
   try {
@@ -292,6 +314,7 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
     res.status(500).json({ error: "Failed to update product" });
   }
 });
+
 // Get static products visibility status (public)
 app.get("/api/static-products", (req, res) => {
   try {
@@ -328,42 +351,7 @@ app.post("/api/static-products/toggle", authenticate, (req, res) => {
     res.status(500).json({ error: "Failed to update static product" });
   }
 });
-// Get static products visibility status (public)
-app.get("/api/static-products", (req, res) => {
-  try {
-    const data = getStaticProducts();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch static products status" });
-  }
-});
 
-// Update static product visibility (admin only)
-app.post("/api/static-products/toggle", authenticate, (req, res) => {
-  try {
-    const { productId } = req.body;
-    if (!productId || !productId.startsWith("static-")) {
-      return res.status(400).json({ error: "Invalid product ID" });
-    }
-    
-    const data = getStaticProducts();
-    const index = data.hidden.indexOf(productId);
-    
-    if (index === -1) {
-      // Hide the product
-      data.hidden.push(productId);
-    } else {
-      // Show the product
-      data.hidden.splice(index, 1);
-    }
-    
-    saveStaticProducts(data);
-    res.json({ hidden: data.hidden, message: "Static product visibility updated" });
-  } catch (err) {
-    console.error("Error updating static product:", err);
-    res.status(500).json({ error: "Failed to update static product" });
-  }
-});
 // Delete product
 app.delete("/api/products/:id", authenticate, async (req, res) => {
   try {
@@ -433,6 +421,4 @@ app.post("/create-checkout-session", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
-
-
-
+```
