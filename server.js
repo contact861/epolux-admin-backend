@@ -2,11 +2,15 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const fetch = require("node-fetch");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const cloudinary = require("cloudinary").v2;
+const https = require("https");
+const cloudinary = require("cloudinary").v2;
+const fetch = require("node-fetch");   // ← ADD THIS
 
 const app = express();
 app.use(cors());
@@ -523,4 +527,5 @@ module.exports = app;
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
