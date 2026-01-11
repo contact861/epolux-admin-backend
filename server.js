@@ -5,43 +5,32 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const cloudinary = require("cloudinary").v2;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Serve uploaded images
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, "uploads", "products");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Products data file
-const productsFile = path.join(__dirname, "data", "products.json");
 const dataDir = path.join(__dirname, "data");
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
+const productsFile = path.join(dataDir, "products.json");
 if (!fs.existsSync(productsFile)) {
   fs.writeFileSync(productsFile, JSON.stringify([], null, 2));
 }
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
+// Multer in-memory storage (for Cloudinary)
 const upload = multer({
-  storage: storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|webp/;
@@ -64,7 +53,6 @@ const authenticate = (req, res, next) => {
     return res.status(401).json({ error: "Authentication required" });
   }
   
-  // Simple token check (in production, use JWT or session)
   const adminToken = process.env.ADMIN_TOKEN || "epolux-admin-2024";
   if (token !== adminToken) {
     return res.status(403).json({ error: "Invalid token" });
@@ -73,7 +61,7 @@ const authenticate = (req, res, next) => {
   next();
 };
 
-// Helper functions
+// Helper functions for products.json
 function getProducts() {
   try {
     const data = fs.readFileSync(productsFile, "utf8");
@@ -91,6 +79,40 @@ function saveProducts(products) {
   } catch (err) {
     console.error("Error saving products:", err);
     return false;
+  }
+}
+
+// Helper: upload a single file buffer to Cloudinary
+function uploadToCloudinary(fileBuffer) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "epolux/products" },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(fileBuffer);
+  });
+}
+
+// Helper: extract Cloudinary public_id from URL
+function getCloudinaryPublicId(url) {
+  try {
+    const parts = url.split("/");
+    const fileWithExt = parts.pop(); // e.g. "abc123.jpg"
+    const fileName = fileWithExt.split(".")[0]; // "abc123"
+
+    const uploadIndex = parts.indexOf("upload");
+    let folderPath = "";
+    if (uploadIndex !== -1 && uploadIndex < parts.length - 1) {
+      folderPath = parts.slice(uploadIndex + 1).join("/");
+    }
+
+    return folderPath ? `${folderPath}/${fileName}` : fileName;
+  } catch (err) {
+    console.error("Error parsing Cloudinary public_id from URL:", url, err);
+    return null;
   }
 }
 
@@ -136,8 +158,8 @@ app.get("/api/products/:id", (req, res) => {
   }
 });
 
-// Create product (admin only)
-app.post("/api/products", authenticate, upload.array("images", 20), (req, res) => {
+// Create product (admin only, Cloudinary upload)
+app.post("/api/products", authenticate, upload.array("images", 20), async (req, res) => {
   try {
     const { specs, translations } = req.body;
     
@@ -147,13 +169,17 @@ app.post("/api/products", authenticate, upload.array("images", 20), (req, res) =
     
     const products = getProducts();
     const newId = products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1;
-    
-    // Convert uploaded files to paths
-    const imagePaths = req.files.map(file => `/uploads/products/${file.filename}`);
+
+    // Upload images to Cloudinary and get URLs
+    const imageUrls = [];
+    for (const file of req.files) {
+      const url = await uploadToCloudinary(file.buffer);
+      imageUrls.push(url);
+    }
     
     const product = {
       id: newId,
-      images: imagePaths,
+      images: imageUrls, // Cloudinary URLs
       specs: JSON.parse(specs || "[]"),
       translations: JSON.parse(translations || "{}"),
       createdAt: new Date().toISOString(),
@@ -170,8 +196,8 @@ app.post("/api/products", authenticate, upload.array("images", 20), (req, res) =
   }
 });
 
-// Update product (admin only)
-app.put("/api/products/:id", authenticate, upload.array("images", 20), (req, res) => {
+// Update product (admin only, Cloudinary upload + keep existing)
+app.put("/api/products/:id", authenticate, upload.array("images", 20), async (req, res) => {
   try {
     const products = getProducts();
     const index = products.findIndex(p => p.id === parseInt(req.params.id));
@@ -181,36 +207,43 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), (req, res
     }
     
     const { specs, translations, existingImages } = req.body;
-    let imagePaths = [];
-    
-    // Keep existing images if provided
+    let imageUrls = [];
+
+    // Keep existing Cloudinary URLs if provided
     if (existingImages) {
-      imagePaths = JSON.parse(existingImages);
+      imageUrls = JSON.parse(existingImages);
     }
-    
-    // Add new uploaded images
+
+    const oldImages = products[index].images || [];
+
+    // Upload new images to Cloudinary
     if (req.files && req.files.length > 0) {
-      const newImages = req.files.map(file => `/uploads/products/${file.filename}`);
-      imagePaths = [...imagePaths, ...newImages];
+      for (const file of req.files) {
+        const url = await uploadToCloudinary(file.buffer);
+        imageUrls.push(url);
+      }
     }
-    
-    if (imagePaths.length === 0) {
+
+    if (imageUrls.length === 0) {
       return res.status(400).json({ error: "At least one image is required" });
     }
-    
-    // Delete old images that are no longer used
-    const oldImages = products[index].images;
-    const imagesToDelete = oldImages.filter(img => !imagePaths.includes(img));
-    imagesToDelete.forEach(imgPath => {
-      const fullPath = path.join(__dirname, imgPath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
+
+    // Delete Cloudinary images that are no longer used
+    const imagesToDelete = oldImages.filter(img => !imageUrls.includes(img));
+    for (const url of imagesToDelete) {
+      const publicId = getCloudinaryPublicId(url);
+      if (publicId) {
+        try {
+          await cloudinary.uploader.destroy(publicId);
+        } catch (err) {
+          console.error("Error deleting Cloudinary image:", publicId, err);
+        }
       }
-    });
+    }
     
     products[index] = {
       ...products[index],
-      images: imagePaths,
+      images: imageUrls,
       specs: JSON.parse(specs || "[]"),
       translations: JSON.parse(translations || "{}"),
       updatedAt: new Date().toISOString()
@@ -224,8 +257,8 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), (req, res
   }
 });
 
-// Delete product (admin only)
-app.delete("/api/products/:id", authenticate, (req, res) => {
+// Delete product (admin only, delete Cloudinary images)
+app.delete("/api/products/:id", authenticate, async (req, res) => {
   try {
     const products = getProducts();
     const index = products.findIndex(p => p.id === parseInt(req.params.id));
@@ -234,13 +267,21 @@ app.delete("/api/products/:id", authenticate, (req, res) => {
       return res.status(404).json({ error: "Product not found" });
     }
     
-    // Delete associated image files
-    products[index].images.forEach(imgPath => {
-      const fullPath = path.join(__dirname, imgPath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
+    const product = products[index];
+
+    // Delete associated Cloudinary images
+    if (product.images && product.images.length > 0) {
+      for (const url of product.images) {
+        const publicId = getCloudinaryPublicId(url);
+        if (publicId) {
+          try {
+            await cloudinary.uploader.destroy(publicId);
+          } catch (err) {
+            console.error("Error deleting Cloudinary image:", publicId, err);
+          }
+        }
       }
-    });
+    }
     
     products.splice(index, 1);
     saveProducts(products);
@@ -252,7 +293,7 @@ app.delete("/api/products/:id", authenticate, (req, res) => {
   }
 });
 
-// Create checkout session
+// Create checkout session (Stripe)
 app.post("/create-checkout-session", async (req, res) => {
   const cart = req.body.cart;
 
