@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-const fetch = require("node-fetch");
+//const fetch = require("node-fetch");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -441,63 +441,17 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 // Shippo: Get shipping rates
-app.post("/shipping/rates", async (req, res) => {
-  try {
-    const { toAddress, weight } = req.body;
+//app.post("/shipping/rates", async (req, res) => {
 
-    const shipment = await shippo.shipment.create({
-      address_from: {
-        name: "EpoLux",
-        street1: "Trzaska cesta 91",
-        city: "Logatec",
-        zip: "1370",
-        country: "SI"
-      },
-      address_to: toAddress,
-      parcels: [
-        {
-          weight: weight,
-          mass_unit: "kg",
-          distance_unit: "cm",
-          height: 10,
-          width: 40,
-          length: 60
-        }
-      ]
-    });
-
-    res.json(shipment.rates);
-  } catch (err) {
-    console.error("Shippo rates error:", err);
-    res.status(500).json({ error: "Failed to fetch shipping rates" });
-  }
-});
 
 // Shippo: Create shipping label
-app.post("/shipping/label", async (req, res) => {
-  try {
-    const { rateId } = req.body;
-
-    const transaction = await shippo.transaction.create({
-      rate: rateId,
-      label_file_type: "PDF",
-      async: false
-    });
-
-    res.json({
-      labelUrl: transaction.label_url,
-      trackingNumber: transaction.tracking_number,
-      trackingUrl: transaction.tracking_url_provider
-    });
-  } catch (err) {
-    console.error("Shippo label error:", err);
-    res.status(500).json({ error: "Failed to create label" });
-  }
-});
+//app.post("/shipping/label", async (req, res) => {
+ 
 
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
 
 
