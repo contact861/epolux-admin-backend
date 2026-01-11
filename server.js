@@ -8,6 +8,8 @@ const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const cloudinary = require("cloudinary").v2;
+const serverless = require("serverless-http");
+module.exports = serverless(app);
 
 const app = express();
 app.use(cors());
@@ -514,6 +516,7 @@ app.post("/shipping/label", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
 
 
