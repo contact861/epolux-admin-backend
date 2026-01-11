@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-const shippo = require("shippo");
+// const shippo = require("shippo");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -21,7 +21,7 @@ cloudinary.config({
 });
 
 // ✅ Initialize Shippo here 
-const shippoClient = shippo(process.env.SHIPPO_API_KEY);
+// const shippoClient = shippo(process.env.SHIPPO_API_KEY);
 
 // Products data file (use /tmp on Vercel, fallback to data dir locally)
 const isVercel = process.env.VERCEL === "1";
@@ -500,6 +500,7 @@ app.post("/shipping/label", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
 
 
