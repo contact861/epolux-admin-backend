@@ -31,7 +31,7 @@ if (!fs.existsSync(productsFile)) {
 // Multer in-memory storage (for Cloudinary)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -47,17 +47,17 @@ const upload = multer({
 // Simple authentication middleware
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(" ")[1]; // Bearer TOKEN
-  
+  const token = authHeader && authHeader.split(" ")[1];
+
   if (!token) {
     return res.status(401).json({ error: "Authentication required" });
   }
-  
+
   const adminToken = process.env.ADMIN_TOKEN || "epolux-admin-2024";
   if (token !== adminToken) {
     return res.status(403).json({ error: "Invalid token" });
   }
-  
+
   next();
 };
 
@@ -82,7 +82,7 @@ function saveProducts(products) {
   }
 }
 
-// Helper: upload a single file buffer to Cloudinary
+// Upload to Cloudinary
 function uploadToCloudinary(fileBuffer) {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -96,12 +96,12 @@ function uploadToCloudinary(fileBuffer) {
   });
 }
 
-// Helper: extract Cloudinary public_id from URL
+// Extract Cloudinary public_id
 function getCloudinaryPublicId(url) {
   try {
     const parts = url.split("/");
-    const fileWithExt = parts.pop(); // e.g. "abc123.jpg"
-    const fileName = fileWithExt.split(".")[0]; // "abc123"
+    const fileWithExt = parts.pop();
+    const fileName = fileWithExt.split(".")[0];
 
     const uploadIndex = parts.indexOf("upload");
     let folderPath = "";
@@ -111,7 +111,7 @@ function getCloudinaryPublicId(url) {
 
     return folderPath ? `${folderPath}/${fileName}` : fileName;
   } catch (err) {
-    console.error("Error parsing Cloudinary public_id from URL:", url, err);
+    console.error("Error parsing Cloudinary public_id:", url, err);
     return null;
   }
 }
@@ -125,7 +125,7 @@ app.get("/", (req, res) => {
 app.post("/api/admin/login", (req, res) => {
   const { password } = req.body;
   const adminPassword = process.env.ADMIN_PASSWORD || "epolux2024";
-  
+
   if (password === adminPassword) {
     const token = process.env.ADMIN_TOKEN || "epolux-admin-2024";
     res.json({ token, message: "Login successful" });
@@ -134,7 +134,7 @@ app.post("/api/admin/login", (req, res) => {
   }
 });
 
-// Get all products (public)
+// Get all products
 app.get("/api/products", (req, res) => {
   try {
     const products = getProducts();
@@ -144,7 +144,7 @@ app.get("/api/products", (req, res) => {
   }
 });
 
-// Get single product (public)
+// Get single product
 app.get("/api/products/:id", (req, res) => {
   try {
     const products = getProducts();
@@ -158,37 +158,36 @@ app.get("/api/products/:id", (req, res) => {
   }
 });
 
-// Create product (admin only, Cloudinary upload)
+// Create product
 app.post("/api/products", authenticate, upload.array("images", 20), async (req, res) => {
   try {
     const { specs, translations } = req.body;
-    
+
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "At least one image is required" });
     }
-    
+
     const products = getProducts();
     const newId = products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1;
 
-    // Upload images to Cloudinary and get URLs
     const imageUrls = [];
     for (const file of req.files) {
       const url = await uploadToCloudinary(file.buffer);
       imageUrls.push(url);
     }
-    
+
     const product = {
       id: newId,
-      images: imageUrls, // Cloudinary URLs
+      images: imageUrls,
       specs: JSON.parse(specs || "[]"),
       translations: JSON.parse(translations || "{}"),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    
+
     products.push(product);
     saveProducts(products);
-    
+
     res.json({ product, message: "Product created successfully" });
   } catch (err) {
     console.error("Error creating product:", err);
@@ -196,27 +195,21 @@ app.post("/api/products", authenticate, upload.array("images", 20), async (req, 
   }
 });
 
-// Update product (admin only, Cloudinary upload + keep existing)
+// Update product
 app.put("/api/products/:id", authenticate, upload.array("images", 20), async (req, res) => {
   try {
     const products = getProducts();
     const index = products.findIndex(p => p.id === parseInt(req.params.id));
-    
+
     if (index === -1) {
       return res.status(404).json({ error: "Product not found" });
     }
-    
-    const { specs, translations, existingImages } = req.body;
-    let imageUrls = [];
 
-    // Keep existing Cloudinary URLs if provided
-    if (existingImages) {
-      imageUrls = JSON.parse(existingImages);
-    }
+    const { specs, translations, existingImages } = req.body;
+    let imageUrls = existingImages ? JSON.parse(existingImages) : [];
 
     const oldImages = products[index].images || [];
 
-    // Upload new images to Cloudinary
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
         const url = await uploadToCloudinary(file.buffer);
@@ -228,7 +221,6 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
       return res.status(400).json({ error: "At least one image is required" });
     }
 
-    // Delete Cloudinary images that are no longer used
     const imagesToDelete = oldImages.filter(img => !imageUrls.includes(img));
     for (const url of imagesToDelete) {
       const publicId = getCloudinaryPublicId(url);
@@ -240,7 +232,7 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
         }
       }
     }
-    
+
     products[index] = {
       ...products[index],
       images: imageUrls,
@@ -248,7 +240,7 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
       translations: JSON.parse(translations || "{}"),
       updatedAt: new Date().toISOString()
     };
-    
+
     saveProducts(products);
     res.json({ product: products[index], message: "Product updated successfully" });
   } catch (err) {
@@ -257,19 +249,18 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
   }
 });
 
-// Delete product (admin only, delete Cloudinary images)
+// Delete product
 app.delete("/api/products/:id", authenticate, async (req, res) => {
   try {
     const products = getProducts();
     const index = products.findIndex(p => p.id === parseInt(req.params.id));
-    
+
     if (index === -1) {
       return res.status(404).json({ error: "Product not found" });
     }
-    
+
     const product = products[index];
 
-    // Delete associated Cloudinary images
     if (product.images && product.images.length > 0) {
       for (const url of product.images) {
         const publicId = getCloudinaryPublicId(url);
@@ -282,10 +273,10 @@ app.delete("/api/products/:id", authenticate, async (req, res) => {
         }
       }
     }
-    
+
     products.splice(index, 1);
     saveProducts(products);
-    
+
     res.json({ message: "Product deleted successfully" });
   } catch (err) {
     console.error("Error deleting product:", err);
@@ -293,7 +284,7 @@ app.delete("/api/products/:id", authenticate, async (req, res) => {
   }
 });
 
-// Create checkout session (Stripe)
+// Stripe checkout
 app.post("/create-checkout-session", async (req, res) => {
   const cart = req.body.cart;
 
@@ -313,8 +304,8 @@ app.post("/create-checkout-session", async (req, res) => {
       shipping_address_collection: {
         allowed_countries: ["SI", "HR", "AT", "DE", "IT"]
       },
-      success_url: process.env.SUCCESS_URL || "http://localhost:5500/success.html",
-      cancel_url: process.env.CANCEL_URL || "http://localhost:5500/cancel.html"
+      success_url: process.env.SUCCESS_URL,
+      cancel_url: process.env.CANCEL_URL
     });
 
     res.json({ url: session.url });
@@ -325,9 +316,5 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Products API: http://localhost:${PORT}/api/products`);
-  console.log(`Admin API: http://localhost:${PORT}/api/admin/login`);
-});
+// IMPORTANT: Export app for Vercel
+module.exports = app;
