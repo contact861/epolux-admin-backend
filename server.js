@@ -443,7 +443,62 @@ app.post("/create-checkout-session", async (req, res) => {
     res.status(500).json({ error: "Failed to create session" });
   }
 });
+// Shippo: Get shipping rates
+app.post("/shipping/rates", async (req, res) => {
+  try {
+    const { toAddress, weight } = req.body;
+
+    const shipment = await shippoClient.shipment.create({
+      address_from: {
+        name: "EpoLux",
+        street1: "Trzaska cesta 91",
+        city: "Logatec",
+        zip: "1370",
+        country: "SI"
+      },
+      address_to: toAddress,
+      parcels: [
+        {
+          weight: weight,
+          mass_unit: "kg",
+          distance_unit: "cm",
+          height: 10,
+          width: 40,
+          length: 60
+        }
+      ]
+    });
+
+    res.json(shipment.rates);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch shipping rates" });
+  }
+});
+
+// Shippo: Create shipping label
+app.post("/shipping/label", async (req, res) => {
+  try {
+    const { rateId } = req.body;
+
+    const transaction = await shippoClient.transaction.create({
+      rate: rateId,
+      label_file_type: "PDF",
+      async: false
+    });
+
+    res.json({
+      labelUrl: transaction.label_url,
+      trackingNumber: transaction.tracking_number,
+      trackingUrl: transaction.tracking_url_provider
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create label" });
+  }
+});
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
