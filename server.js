@@ -20,9 +20,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// ✅ Initialize Shippo here 
-// const shippoClient = shippo(process.env.SHIPPO_API_KEY);
-
 // Products data file (use /tmp on Vercel, fallback to data dir locally)
 const isVercel = process.env.VERCEL === "1";
 const dataDir = isVercel ? "/tmp" : path.join(__dirname, "data");
@@ -449,16 +446,32 @@ app.post("/shipping/rates", async (req, res) => {
     const { toAddress, weight } = req.body;
 
     const shipment = await shippo.shipment.create({
-      ...
+      address_from: {
+        name: "EpoLux",
+        street1: "Trzaska cesta 91",
+        city: "Logatec",
+        zip: "1370",
+        country: "SI"
+      },
+      address_to: toAddress,
+      parcels: [
+        {
+          weight: weight,
+          mass_unit: "kg",
+          distance_unit: "cm",
+          height: 10,
+          width: 40,
+          length: 60
+        }
+      ]
     });
 
     res.json(shipment.rates);
   } catch (err) {
-    console.error(err);
+    console.error("Shippo rates error:", err);
     res.status(500).json({ error: "Failed to fetch shipping rates" });
   }
 });
-
 
 // Shippo: Create shipping label
 app.post("/shipping/label", async (req, res) => {
@@ -477,13 +490,15 @@ app.post("/shipping/label", async (req, res) => {
       trackingUrl: transaction.tracking_url_provider
     });
   } catch (err) {
-    console.error(err);
+    console.error("Shippo label error:", err);
     res.status(500).json({ error: "Failed to create label" });
   }
 });
 
+
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
 
 
 
