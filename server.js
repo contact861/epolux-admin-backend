@@ -410,13 +410,14 @@ app.post("/api/static-products/toggle", authenticate, async (req, res) => {
 // Delete product
 app.delete("/api/products/:id", authenticate, async (req, res) => {
   try {
+    console.log(`🗑️ Deleting product: ${req.params.id}`);
+    
+    // Try to get product for image cleanup, but don't fail if not found
+    // (deleteProduct has better lookup logic)
     const product = await getProductById(req.params.id);
-
-    if (!product) {
-      return res.status(404).json({ error: "Product not found" });
-    }
-
-    if (product.images && product.images.length > 0) {
+    
+    // Delete images from Cloudinary if product was found
+    if (product && product.images && product.images.length > 0) {
       for (const url of product.images) {
         const publicId = getCloudinaryPublicId(url);
         if (publicId) {
@@ -429,6 +430,7 @@ app.delete("/api/products/:id", authenticate, async (req, res) => {
       }
     }
 
+    // Try to delete - this has better lookup logic
     const deleted = await deleteProduct(req.params.id);
 
     if (!deleted) {
@@ -438,7 +440,7 @@ app.delete("/api/products/:id", authenticate, async (req, res) => {
     res.json({ message: "Product deleted successfully" });
   } catch (err) {
     console.error("Error deleting product:", err);
-    res.status(500).json({ error: "Failed to delete product" });
+    res.status(500).json({ error: "Failed to delete product", details: err.message });
   }
 });
 
