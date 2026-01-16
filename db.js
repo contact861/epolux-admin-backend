@@ -1,101 +1,248 @@
-# ✅ MongoDB Migration Complete!
+// MongoDB Database Connection and Helper Functions
+require("dotenv").config();
+const { MongoClient } = require("mongodb");
 
-Your backend has been successfully migrated from file-based storage to MongoDB database!
+const MONGODB_URI = process.env.MONGODB_URI || "";
+const DB_NAME = process.env.MONGODB_DB_NAME || "epolux";
+const PRODUCTS_COLLECTION = "products";
+const STATIC_PRODUCTS_COLLECTION = "staticProducts";
 
-## What Was Changed
+let client = null;
+let db = null;
 
-### ✅ Files Created:
-1. **`backend/db.js`** - MongoDB connection and database operations
-2. **`backend/MONGODB_SETUP.md`** - Complete setup guide
+// Connect to MongoDB
+async function connectDB() {
+  if (db) {
+    return db; // Already connected
+  }
 
-### ✅ Files Updated:
-1. **`backend/package.json`** - Added `mongodb` and `cloudinary` dependencies
-2. **`backend/server.js`** - Replaced all file system operations with MongoDB operations
+  if (!MONGODB_URI) {
+    console.warn("⚠️ MONGODB_URI not set - MongoDB features disabled");
+    return null;
+  }
 
-### ✅ What's Different:
+  try {
+    console.log("🔄 Attempting to connect to MongoDB...");
+    console.log("📍 Database name:", DB_NAME);
+    console.log("🔗 Connection string present:", !!MONGODB_URI);
+    
+    client = new MongoClient(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 10000
+    });
+    
+    await client.connect();
+    db = client.db(DB_NAME);
+    
+    // Test the connection
+    await db.admin().ping();
+    
+    console.log("✅ Connected to MongoDB successfully");
+    console.log("📊 Database:", DB_NAME);
+    return db;
+  } catch (err) {
+    console.error("❌ MongoDB connection error:", err.message);
+    console.error("❌ Error details:", err);
+    return null;
+  }
+}
 
-**Before:**
-- Products stored in `data/products.json` file
-- Data lost on Vercel serverless function restart
-- Read-only filesystem on Vercel
+// Get database instance (connects if needed)
+async function getDB() {
+  if (!db) {
+    const connected = await connectDB();
+    if (!connected) {
+      throw new Error("MongoDB connection not available. Please check MONGODB_URI environment variable.");
+    }
+  }
+  return db;
+}
 
-**After:**
-- Products stored in MongoDB Atlas cloud database
-- Permanent storage - data never disappears
-- Fast, scalable, production-ready
+// Products Collection Operations
+async function getProducts() {
+  try {
+    const database = await getDB();
+    if (!database) {
+      console.error("Database connection not available");
+      return [];
+    }
+    const collection = database.collection(PRODUCTS_COLLECTION);
+    const products = await collection.find({}).toArray();
+    return products.map(p => ({
+      ...p,
+      id: p.id || (p._id ? p._id.toString() : String(Math.random())),
+      _id: undefined
+    }));
+  } catch (err) {
+    console.error("Error getting products:", err.message || err);
+    return [];
+  }
+}
 
----
+async function getProductById(id) {
+  try {
+    const database = await getDB();
+    const collection = database.collection(PRODUCTS_COLLECTION);
+    const { ObjectId } = require("mongodb");
+    
+    let product = null;
+    try {
+      product = await collection.findOne({ _id: new ObjectId(id) });
+    } catch (e) {
+      product = await collection.findOne({ id: parseInt(id) });
+    }
+    
+    if (product) {
+      return {
+        ...product,
+        id: product._id ? product._id.toString() : product.id,
+        _id: undefined
+      };
+    }
+    return null;
+  } catch (err) {
+    console.error("Error getting product by ID:", err);
+    return null;
+  }
+}
 
-## Next Steps (IMPORTANT!)
+async function createProduct(product) {
+  try {
+    const database = await getDB();
+    const collection = database.collection(PRODUCTS_COLLECTION);
+    
+    const existingProducts = await collection.find({}).toArray();
+    const maxId = existingProducts.length > 0 
+      ? Math.max(...existingProducts.map(p => p.id || 0))
+      : 0;
+    
+    const newProduct = {
+      id: maxId + 1,
+      ...product,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    const result = await collection.insertOne(newProduct);
+    return {
+      ...newProduct,
+      id: newProduct.id.toString(),
+      _id: result.insertedId.toString()
+    };
+  } catch (err) {
+    console.error("Error creating product:", err);
+    throw err;
+  }
+}
 
-### 1. Set Up MongoDB Atlas (Follow `MONGODB_SETUP.md`)
+async function updateProduct(id, updates) {
+  try {
+    const database = await getDB();
+    const collection = database.collection(PRODUCTS_COLLECTION);
+    const { ObjectId } = require("mongodb");
+    
+    const updateData = {
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    
+    let result = null;
+    try {
+      result = await collection.findOneAndUpdate(
+        { _id: new ObjectId(id) },
+        { $set: updateData },
+        { returnDocument: "after" }
+      );
+    } catch (e) {
+      result = await collection.findOneAndUpdate(
+        { id: parseInt(id) },
+        { $set: updateData },
+        { returnDocument: "after" }
+      );
+    }
+    
+    if (result && result.value) {
+      return {
+        ...result.value,
+        id: result.value._id ? result.value._id.toString() : result.value.id,
+        _id: undefined
+      };
+    }
+    return null;
+  } catch (err) {
+    console.error("Error updating product:", err);
+    throw err;
+  }
+}
 
-You need to:
-1. Create a free MongoDB Atlas account
-2. Create a cluster
-3. Get your connection string
-4. Add environment variables to Vercel
+async function deleteProduct(id) {
+  try {
+    const database = await getDB();
+    const collection = database.collection(PRODUCTS_COLLECTION);
+    const { ObjectId } = require("mongodb");
+    
+    let result = null;
+    try {
+      result = await collection.findOneAndDelete({ _id: new ObjectId(id) });
+    } catch (e) {
+      result = await collection.findOneAndDelete({ id: parseInt(id) });
+    }
+    
+    return result && result.value ? true : false;
+  } catch (err) {
+    console.error("Error deleting product:", err);
+    throw err;
+  }
+}
 
-**See `backend/MONGODB_SETUP.md` for detailed instructions!**
+// Static Products Collection Operations
+async function getStaticProducts() {
+  try {
+    const database = await getDB();
+    const collection = database.collection(STATIC_PRODUCTS_COLLECTION);
+    const data = await collection.findOne({ _id: "config" });
+    return data || { hidden: [] };
+  } catch (err) {
+    console.error("Error getting static products:", err);
+    return { hidden: [] };
+  }
+}
 
-### 2. Install Dependencies
+async function saveStaticProducts(data) {
+  try {
+    const database = await getDB();
+    const collection = database.collection(STATIC_PRODUCTS_COLLECTION);
+    await collection.updateOne(
+      { _id: "config" },
+      { $set: { ...data, _id: "config" } },
+      { upsert: true }
+    );
+    return true;
+  } catch (err) {
+    console.error("Error saving static products:", err);
+    return false;
+  }
+}
 
-Run this in your `backend` folder:
-```bash
-npm install
-```
+// Close database connection
+async function closeDB() {
+  if (client) {
+    await client.close();
+    db = null;
+    client = null;
+    console.log("MongoDB connection closed");
+  }
+}
 
-### 3. Add Environment Variables
-
-**In Vercel:**
-- Go to your project → Settings → Environment Variables
-- Add: `MONGODB_URI` (your connection string)
-- Add: `MONGODB_DB_NAME` (use `epolux`)
-
-**In local `.env` file:**
-```env
-MONGODB_URI=mongodb+srv://username:password@cluster0.xxx.mongodb.net/?retryWrites=true&w=majority
-MONGODB_DB_NAME=epolux
-```
-
-### 4. Deploy to Vercel
-
-```bash
-git add .
-git commit -m "Migrate to MongoDB database"
-git push
-```
-
----
-
-## Benefits
-
-✅ **Permanent Storage** - Products never disappear  
-✅ **Fast Performance** - Optimized database queries  
-✅ **Scalable** - Handles 100+ products easily  
-✅ **Production-Ready** - Industry-standard solution  
-✅ **Free Tier** - 512MB storage (thousands of products)  
-
----
-
-## Testing
-
-After setup, test by:
-1. Creating a product in admin panel
-2. Refreshing the page - product should still be there
-3. Creating multiple products - all should persist
-4. Checking MongoDB Atlas dashboard to see your data
-
----
-
-## Support
-
-If you have issues:
-1. Check `backend/MONGODB_SETUP.md` for setup instructions
-2. Verify environment variables are set correctly
-3. Check Vercel logs for connection errors
-4. Verify MongoDB Atlas cluster is running
-
----
-
-**Your backend is now ready for production with permanent, reliable database storage! 🚀**
+module.exports = {
+  connectDB,
+  getDB,
+  getProducts,
+  getProductById,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  getStaticProducts,
+  saveStaticProducts,
+  closeDB
+};
