@@ -10,50 +10,64 @@ const STATIC_PRODUCTS_COLLECTION = "staticProducts";
 let client = null;
 let db = null;
 
-// Connect to MongoDB
-async function connectDB() {
+// Connect to MongoDB with retry logic
+async function connectDB(retries = 2) {
   if (db) {
     return db; // Already connected
   }
 
   if (!MONGODB_URI) {
     console.warn("⚠️ MONGODB_URI not set - MongoDB features disabled");
-    return null;
+    throw new Error("MONGODB_URI environment variable is not set. Please configure it in Vercel Settings → Environment Variables.");
   }
 
-  try {
-    console.log("🔄 Attempting to connect to MongoDB...");
-    console.log("📍 Database name:", DB_NAME);
-    console.log("🔗 Connection string present:", !!MONGODB_URI);
-    
-    client = new MongoClient(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 10000
-    });
-    
-    await client.connect();
-    db = client.db(DB_NAME);
-    
-    // Test the connection
-    await db.admin().ping();
-    
-    console.log("✅ Connected to MongoDB successfully");
-    console.log("📊 Database:", DB_NAME);
-    return db;
-  } catch (err) {
-    console.error("❌ MongoDB connection error:", err.message);
-    console.error("❌ Error details:", err);
-    return null;
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      console.log(`🔄 Attempting to connect to MongoDB (attempt ${attempt}/${retries + 1})...`);
+      console.log("📍 Database name:", DB_NAME);
+      console.log("🔗 Connection string present:", !!MONGODB_URI);
+      console.log("🔗 Connection string starts with:", MONGODB_URI.substring(0, 20) + "...");
+      
+      client = new MongoClient(MONGODB_URI, {
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 15000
+      });
+      
+      await client.connect();
+      db = client.db(DB_NAME);
+      
+      // Test the connection
+      await db.admin().ping();
+      
+      console.log("✅ Connected to MongoDB successfully");
+      console.log("📊 Database:", DB_NAME);
+      return db;
+    } catch (err) {
+      console.error(`❌ MongoDB connection error (attempt ${attempt}):`, err.message);
+      if (err.message.includes("authentication")) {
+        console.error("❌ Authentication failed - check username and password in connection string");
+      } else if (err.message.includes("IP")) {
+        console.error("❌ IP not whitelisted - add 0.0.0.0/0 in MongoDB Atlas Network Access");
+      } else if (err.message.includes("timeout")) {
+        console.error("❌ Connection timeout - check network connectivity");
+      }
+      
+      if (attempt <= retries) {
+        const delay = attempt * 1000; // Exponential backoff
+        console.log(`⏳ Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error("❌ All connection attempts failed");
+        throw new Error(`Failed to connect to MongoDB after ${retries + 1} attempts: ${err.message}`);
+      }
+    }
   }
 }
 
 // Get database instance (connects if needed)
 async function getDB() {
   if (!db) {
-    const connected = await connectDB();
-    if (!connected) {
-      throw new Error("MongoDB connection not available. Please check MONGODB_URI environment variable.");
-    }
+    await connectDB(); // This will throw if connection fails
   }
   return db;
 }
