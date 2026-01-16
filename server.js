@@ -4,9 +4,18 @@ const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const multer = require("multer");
 const path = require("path");
-const fs = require("fs");
 const https = require("https");
 const cloudinary = require("cloudinary").v2;
+const {
+  connectDB,
+  getProducts,
+  getProductById,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  getStaticProducts,
+  saveStaticProducts
+} = require("./db");
 
 const app = express();
 app.use(cors());
@@ -19,23 +28,14 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Products data file (use /tmp on Vercel, fallback to data dir locally)
-const isVercel = process.env.VERCEL === "1";
-const dataDir = isVercel ? "/tmp" : path.join(__dirname, "data");
-const productsFile = path.join(dataDir, "products.json");
-
-// Only try to create directory/files if not on Vercel (Vercel file system is read-only except /tmp)
-if (!isVercel) {
-  try {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    if (!fs.existsSync(productsFile)) {
-      fs.writeFileSync(productsFile, JSON.stringify([], null, 2));
-    }
-  } catch (err) {
-    console.warn("Could not initialize data directory:", err.message);
-  }
+// Initialize MongoDB connection on startup (only if MONGODB_URI is set)
+if (process.env.MONGODB_URI) {
+  connectDB().catch(err => {
+    console.error("Failed to connect to MongoDB:", err);
+    // Don't exit - allow server to start even if MongoDB fails (for graceful degradation)
+  });
+} else {
+  console.warn("⚠️ MONGODB_URI not set - MongoDB features will not work");
 }
 
 // Multer in-memory storage (for Cloudinary)
@@ -70,51 +70,6 @@ const authenticate = (req, res, next) => {
 
   next();
 };
-
-// Helper functions for products.json (in-memory for Vercel, file-based locally)
-let productsData = [];
-
-function getProducts() {
-  if (isVercel) {
-    return productsData;
-  }
-  try {
-    if (fs.existsSync(productsFile)) {
-      const data = fs.readFileSync(productsFile, "utf8");
-      return JSON.parse(data);
-    }
-    return [];
-  } catch (err) {
-    console.error("Error reading products:", err);
-    return [];
-  }
-}
-
-function saveProducts(products) {
-  if (isVercel) {
-    productsData = products;
-    return true;
-  }
-  try {
-    fs.writeFileSync(productsFile, JSON.stringify(products, null, 2));
-    return true;
-  } catch (err) {
-    console.error("Error saving products:", err);
-    return false;
-  }
-}
-
-// Helper functions for static products visibility (in-memory for Vercel)
-let staticProductsData = { hidden: [] };
-
-function getStaticProducts() {
-  return staticProductsData;
-}
-
-function saveStaticProducts(data) {
-  staticProductsData = data;
-  return true;
-}
 
 // Upload to Cloudinary
 function uploadToCloudinary(fileBuffer) {
@@ -222,25 +177,26 @@ app.post("/api/translate", (req, res) => {
 });
 
 // Get all products
-app.get("/api/products", (req, res) => {
+app.get("/api/products", async (req, res) => {
   try {
-    const products = getProducts();
+    const products = await getProducts();
     res.json(products);
   } catch (err) {
+    console.error("Error fetching products:", err);
     res.status(500).json({ error: "Failed to fetch products" });
   }
 });
 
 // Get single product
-app.get("/api/products/:id", (req, res) => {
+app.get("/api/products/:id", async (req, res) => {
   try {
-    const products = getProducts();
-    const product = products.find(p => p.id === parseInt(req.params.id));
+    const product = await getProductById(req.params.id);
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
     res.json(product);
   } catch (err) {
+    console.error("Error fetching product:", err);
     res.status(500).json({ error: "Failed to fetch product" });
   }
 });
@@ -254,26 +210,19 @@ app.post("/api/products", authenticate, upload.array("images", 20), async (req, 
       return res.status(400).json({ error: "At least one image is required" });
     }
 
-    const products = getProducts();
-    const newId = products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1;
-
     const imageUrls = [];
     for (const file of req.files) {
       const url = await uploadToCloudinary(file.buffer);
       imageUrls.push(url);
     }
 
-    const product = {
-      id: newId,
+    const productData = {
       images: imageUrls,
       specs: JSON.parse(specs || "[]"),
-      translations: JSON.parse(translations || "{}"),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      translations: JSON.parse(translations || "{}")
     };
 
-    products.push(product);
-    saveProducts(products);
+    const product = await createProduct(productData);
 
     res.json({ product, message: "Product created successfully" });
   } catch (err) {
@@ -285,17 +234,16 @@ app.post("/api/products", authenticate, upload.array("images", 20), async (req, 
 // Update product
 app.put("/api/products/:id", authenticate, upload.array("images", 20), async (req, res) => {
   try {
-    const products = getProducts();
-    const index = products.findIndex(p => p.id === parseInt(req.params.id));
+    const existingProduct = await getProductById(req.params.id);
 
-    if (index === -1) {
+    if (!existingProduct) {
       return res.status(404).json({ error: "Product not found" });
     }
 
     const { specs, translations, existingImages } = req.body;
     let imageUrls = existingImages ? JSON.parse(existingImages) : [];
 
-    const oldImages = products[index].images || [];
+    const oldImages = existingProduct.images || [];
 
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
@@ -320,16 +268,19 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
       }
     }
 
-    products[index] = {
-      ...products[index],
+    const updates = {
       images: imageUrls,
       specs: JSON.parse(specs || "[]"),
-      translations: JSON.parse(translations || "{}"),
-      updatedAt: new Date().toISOString()
+      translations: JSON.parse(translations || "{}")
     };
 
-    saveProducts(products);
-    res.json({ product: products[index], message: "Product updated successfully" });
+    const updatedProduct = await updateProduct(req.params.id, updates);
+
+    if (!updatedProduct) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    res.json({ product: updatedProduct, message: "Product updated successfully" });
   } catch (err) {
     console.error("Error updating product:", err);
     res.status(500).json({ error: "Failed to update product" });
@@ -337,36 +288,38 @@ app.put("/api/products/:id", authenticate, upload.array("images", 20), async (re
 });
 
 // Get static products visibility status (public)
-app.get("/api/static-products", (req, res) => {
+app.get("/api/static-products", async (req, res) => {
   try {
-    const data = getStaticProducts();
+    const data = await getStaticProducts();
     res.json(data);
   } catch (err) {
+    console.error("Error fetching static products:", err);
     res.status(500).json({ error: "Failed to fetch static products status" });
   }
 });
 
 // Update static product visibility (admin only)
-app.post("/api/static-products/toggle", authenticate, (req, res) => {
+app.post("/api/static-products/toggle", authenticate, async (req, res) => {
   try {
     const { productId } = req.body;
-    if (!productId || !productId.startsWith("static-")) {
-      return res.status(400).json({ error: "Invalid product ID" });
+    if (!productId) {
+      return res.status(400).json({ error: "Product ID is required" });
     }
     
-    const data = getStaticProducts();
-    const index = data.hidden.indexOf(productId);
+    const data = await getStaticProducts();
+    const hidden = data.hidden || [];
+    const index = hidden.indexOf(String(productId));
     
     if (index === -1) {
       // Hide the product
-      data.hidden.push(productId);
+      hidden.push(String(productId));
     } else {
       // Show the product
-      data.hidden.splice(index, 1);
+      hidden.splice(index, 1);
     }
     
-    saveStaticProducts(data);
-    res.json({ hidden: data.hidden, message: "Static product visibility updated" });
+    await saveStaticProducts({ hidden });
+    res.json({ hidden, message: "Product visibility updated" });
   } catch (err) {
     console.error("Error updating static product:", err);
     res.status(500).json({ error: "Failed to update static product" });
@@ -376,14 +329,11 @@ app.post("/api/static-products/toggle", authenticate, (req, res) => {
 // Delete product
 app.delete("/api/products/:id", authenticate, async (req, res) => {
   try {
-    const products = getProducts();
-    const index = products.findIndex(p => p.id === parseInt(req.params.id));
+    const product = await getProductById(req.params.id);
 
-    if (index === -1) {
+    if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
-
-    const product = products[index];
 
     if (product.images && product.images.length > 0) {
       for (const url of product.images) {
@@ -398,8 +348,11 @@ app.delete("/api/products/:id", authenticate, async (req, res) => {
       }
     }
 
-    products.splice(index, 1);
-    saveProducts(products);
+    const deleted = await deleteProduct(req.params.id);
+
+    if (!deleted) {
+      return res.status(404).json({ error: "Product not found" });
+    }
 
     res.json({ message: "Product deleted successfully" });
   } catch (err) {
@@ -442,3 +395,13 @@ app.post("/create-checkout-session", async (req, res) => {
 
 // IMPORTANT: Export app for Vercel
 module.exports = app;
+
+// For local development, start the server
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Products API: http://localhost:${PORT}/api/products`);
+    console.log(`Admin API: http://localhost:${PORT}/api/admin/login`);
+  });
+}
