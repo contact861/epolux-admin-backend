@@ -204,30 +204,78 @@ app.get("/api/products/:id", async (req, res) => {
 // Create product
 app.post("/api/products", authenticate, upload.array("images", 20), async (req, res) => {
   try {
+    console.log("📦 Creating product...");
     const { specs, translations } = req.body;
 
     if (!req.files || req.files.length === 0) {
+      console.error("❌ No images provided");
       return res.status(400).json({ error: "At least one image is required" });
     }
 
+    console.log(`📸 Uploading ${req.files.length} image(s) to Cloudinary...`);
     const imageUrls = [];
     for (const file of req.files) {
-      const url = await uploadToCloudinary(file.buffer);
-      imageUrls.push(url);
+      try {
+        const url = await uploadToCloudinary(file.buffer);
+        imageUrls.push(url);
+        console.log("✅ Image uploaded:", url);
+      } catch (cloudErr) {
+        console.error("❌ Cloudinary upload error:", cloudErr);
+        return res.status(500).json({ error: `Failed to upload image: ${cloudErr.message}` });
+      }
     }
+
+    let parsedSpecs, parsedTranslations;
+    try {
+      parsedSpecs = JSON.parse(specs || "[]");
+      parsedTranslations = JSON.parse(translations || "{}");
+    } catch (parseErr) {
+      console.error("❌ JSON parse error:", parseErr);
+      return res.status(400).json({ error: `Invalid JSON data: ${parseErr.message}` });
+    }
+
+    // Extract publish flags from request body
+    const publishFlags = {
+      published: req.body.published === "true" || req.body.published === true,
+      isPublished: req.body.isPublished === "true" || req.body.isPublished === true,
+      active: req.body.active === "true" || req.body.active === true,
+      isActive: req.body.isActive === "true" || req.body.isActive === true,
+      visible: req.body.visible === "true" || req.body.visible === true,
+      isVisible: req.body.isVisible === "true" || req.body.isVisible === true,
+      status: req.body.status || "published"
+    };
 
     const productData = {
       images: imageUrls,
-      specs: JSON.parse(specs || "[]"),
-      translations: JSON.parse(translations || "{}")
+      specs: parsedSpecs,
+      translations: parsedTranslations,
+      ...publishFlags
     };
 
+    // Check MongoDB connection before creating product
+    if (!process.env.MONGODB_URI) {
+      console.error("❌ MONGODB_URI not set");
+      return res.status(500).json({ error: "Database not configured. Please set MONGODB_URI environment variable." });
+    }
+
+    console.log("💾 Saving product to MongoDB...");
     const product = await createProduct(productData);
+    
+    if (!product) {
+      console.error("❌ createProduct returned null");
+      return res.status(500).json({ error: "Failed to save product to database. Check MongoDB connection." });
+    }
+    
+    console.log("✅ Product created successfully:", product.id);
 
     res.json({ product, message: "Product created successfully" });
   } catch (err) {
-    console.error("Error creating product:", err);
-    res.status(500).json({ error: "Failed to create product" });
+    console.error("❌ Error creating product:", err);
+    console.error("❌ Error stack:", err.stack);
+    res.status(500).json({ 
+      error: "Failed to create product",
+      details: err.message || String(err)
+    });
   }
 });
 
