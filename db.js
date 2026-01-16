@@ -82,11 +82,23 @@ async function getProducts() {
     }
     const collection = database.collection(PRODUCTS_COLLECTION);
     const products = await collection.find({}).toArray();
-    return products.map(p => ({
-      ...p,
-      id: p.id || (p._id ? p._id.toString() : String(Math.random())),
-      _id: undefined
-    }));
+    return products.map(p => {
+      // Ensure id is always a string for consistency
+      let productId;
+      if (p.id) {
+        productId = String(p.id);
+      } else if (p._id) {
+        productId = p._id.toString();
+      } else {
+        productId = String(Math.random());
+      }
+      
+      return {
+        ...p,
+        id: productId,
+        _id: undefined
+      };
+    });
   } catch (err) {
     console.error("Error getting products:", err.message || err);
     return [];
@@ -99,20 +111,51 @@ async function getProductById(id) {
     const collection = database.collection(PRODUCTS_COLLECTION);
     const { ObjectId } = require("mongodb");
     
+    console.log(`🔍 Looking up product with ID: ${id} (type: ${typeof id})`);
+    
     let product = null;
-    try {
-      product = await collection.findOne({ _id: new ObjectId(id) });
-    } catch (e) {
-      product = await collection.findOne({ id: parseInt(id) });
+    
+    // Try multiple lookup strategies
+    // 1. Try as numeric ID first (most common case)
+    const numericId = parseInt(id);
+    if (!isNaN(numericId)) {
+      product = await collection.findOne({ id: numericId });
+      if (product) {
+        console.log(`✅ Found product by numeric id: ${numericId}`);
+      }
+    }
+    
+    // 2. Try as string ID
+    if (!product) {
+      product = await collection.findOne({ id: String(id) });
+      if (product) {
+        console.log(`✅ Found product by string id: ${String(id)}`);
+      }
+    }
+    
+    // 3. Try as MongoDB ObjectId (if it looks like one)
+    if (!product && ObjectId.isValid(id) && id.length === 24) {
+      try {
+        product = await collection.findOne({ _id: new ObjectId(id) });
+        if (product) {
+          console.log(`✅ Found product by ObjectId: ${id}`);
+        }
+      } catch (e) {
+        // Invalid ObjectId format, skip
+      }
     }
     
     if (product) {
-      return {
+      const result = {
         ...product,
-        id: product._id ? product._id.toString() : product.id,
+        id: product.id ? String(product.id) : (product._id ? product._id.toString() : String(id)),
         _id: undefined
       };
+      console.log(`📦 Returning product with id: ${result.id}`);
+      return result;
     }
+    
+    console.error(`❌ Product not found with ID: ${id}`);
     return null;
   } catch (err) {
     console.error("Error getting product by ID:", err);
@@ -155,33 +198,47 @@ async function updateProduct(id, updates) {
     const collection = database.collection(PRODUCTS_COLLECTION);
     const { ObjectId } = require("mongodb");
     
+    console.log(`🔄 Updating product with ID: ${id}`);
+    
     const updateData = {
       ...updates,
       updatedAt: new Date().toISOString()
     };
     
     let result = null;
-    try {
-      result = await collection.findOneAndUpdate(
-        { _id: new ObjectId(id) },
-        { $set: updateData },
-        { returnDocument: "after" }
-      );
-    } catch (e) {
-      result = await collection.findOneAndUpdate(
-        { id: parseInt(id) },
-        { $set: updateData },
-        { returnDocument: "after" }
-      );
+    let query = null;
+    
+    // Try multiple lookup strategies (same as getProductById)
+    const numericId = parseInt(id);
+    if (!isNaN(numericId)) {
+      query = { id: numericId };
+    } else if (ObjectId.isValid(id) && id.length === 24) {
+      try {
+        query = { _id: new ObjectId(id) };
+      } catch (e) {
+        query = { id: String(id) };
+      }
+    } else {
+      query = { id: String(id) };
     }
     
+    result = await collection.findOneAndUpdate(
+      query,
+      { $set: updateData },
+      { returnDocument: "after" }
+    );
+    
     if (result && result.value) {
-      return {
+      const updated = {
         ...result.value,
-        id: result.value._id ? result.value._id.toString() : result.value.id,
+        id: result.value.id ? String(result.value.id) : (result.value._id ? result.value._id.toString() : String(id)),
         _id: undefined
       };
+      console.log(`✅ Product updated with id: ${updated.id}`);
+      return updated;
     }
+    
+    console.error(`❌ Product not found for update with ID: ${id}`);
     return null;
   } catch (err) {
     console.error("Error updating product:", err);
@@ -195,14 +252,34 @@ async function deleteProduct(id) {
     const collection = database.collection(PRODUCTS_COLLECTION);
     const { ObjectId } = require("mongodb");
     
+    console.log(`🗑️ Deleting product with ID: ${id}`);
+    
     let result = null;
-    try {
-      result = await collection.findOneAndDelete({ _id: new ObjectId(id) });
-    } catch (e) {
-      result = await collection.findOneAndDelete({ id: parseInt(id) });
+    let query = null;
+    
+    // Try multiple lookup strategies (same as getProductById)
+    const numericId = parseInt(id);
+    if (!isNaN(numericId)) {
+      query = { id: numericId };
+    } else if (ObjectId.isValid(id) && id.length === 24) {
+      try {
+        query = { _id: new ObjectId(id) };
+      } catch (e) {
+        query = { id: String(id) };
+      }
+    } else {
+      query = { id: String(id) };
     }
     
-    return result && result.value ? true : false;
+    result = await collection.findOneAndDelete(query);
+    
+    if (result && result.value) {
+      console.log(`✅ Product deleted with id: ${id}`);
+      return true;
+    }
+    
+    console.error(`❌ Product not found for deletion with ID: ${id}`);
+    return false;
   } catch (err) {
     console.error("Error deleting product:", err);
     throw err;
