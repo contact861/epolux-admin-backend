@@ -145,18 +145,7 @@ async function getProductById(id) {
       }
     }
     
-    // 4. Last resort: Try to find any product and match by string comparison
-    // This handles edge cases where id format doesn't match
-    if (!product) {
-      const allProducts = await collection.find({}).toArray();
-      product = allProducts.find(p => {
-        const pid = String(p.id || p._id || '');
-        return pid === String(id);
-      });
-      if (product) {
-        console.log(`✅ Found product by string comparison: ${id}`);
-      }
-    }
+    // Note: Removed slow fallback that fetches all products - too inefficient
     
     if (product) {
       const result = {
