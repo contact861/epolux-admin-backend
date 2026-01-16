@@ -31,11 +31,13 @@ cloudinary.config({
 // Initialize MongoDB connection on startup (only if MONGODB_URI is set)
 if (process.env.MONGODB_URI) {
   connectDB().catch(err => {
-    console.error("Failed to connect to MongoDB:", err);
-    // Don't exit - allow server to start even if MongoDB fails (for graceful degradation)
+    console.error("⚠️ Failed to connect to MongoDB on startup:", err.message);
+    console.error("⚠️ Server will continue, but MongoDB operations will fail until connection is established");
+    // Don't exit - allow server to start even if MongoDB fails (connection will be retried on first use)
   });
 } else {
   console.warn("⚠️ MONGODB_URI not set - MongoDB features will not work");
+  console.warn("⚠️ Please set MONGODB_URI in Vercel Settings → Environment Variables");
 }
 
 // Multer in-memory storage (for Cloudinary)
@@ -255,15 +257,47 @@ app.post("/api/products", authenticate, upload.array("images", 20), async (req, 
     // Check MongoDB connection before creating product
     if (!process.env.MONGODB_URI) {
       console.error("❌ MONGODB_URI not set");
-      return res.status(500).json({ error: "Database not configured. Please set MONGODB_URI environment variable." });
+      return res.status(500).json({ 
+        error: "Database not configured", 
+        details: "MONGODB_URI environment variable is not set. Please configure it in Vercel Settings → Environment Variables." 
+      });
     }
 
     console.log("💾 Saving product to MongoDB...");
-    const product = await createProduct(productData);
+    let product;
+    try {
+      product = await createProduct(productData);
+    } catch (dbErr) {
+      console.error("❌ Database error:", dbErr.message);
+      if (dbErr.message.includes("MONGODB_URI")) {
+        return res.status(500).json({ 
+          error: "Database configuration error", 
+          details: dbErr.message 
+        });
+      } else if (dbErr.message.includes("authentication")) {
+        return res.status(500).json({ 
+          error: "Database authentication failed", 
+          details: "Check your MongoDB username and password in the connection string." 
+        });
+      } else if (dbErr.message.includes("IP") || dbErr.message.includes("whitelist")) {
+        return res.status(500).json({ 
+          error: "Database network error", 
+          details: "Your IP is not whitelisted. Add 0.0.0.0/0 in MongoDB Atlas → Network Access." 
+        });
+      } else {
+        return res.status(500).json({ 
+          error: "Database connection failed", 
+          details: dbErr.message 
+        });
+      }
+    }
     
     if (!product) {
       console.error("❌ createProduct returned null");
-      return res.status(500).json({ error: "Failed to save product to database. Check MongoDB connection." });
+      return res.status(500).json({ 
+        error: "Failed to save product", 
+        details: "Product creation returned null. Check MongoDB connection and logs." 
+      });
     }
     
     console.log("✅ Product created successfully:", product.id);
@@ -282,16 +316,15 @@ app.post("/api/products", authenticate, upload.array("images", 20), async (req, 
 // Update product
 app.put("/api/products/:id", authenticate, upload.array("images", 20), async (req, res) => {
   try {
+    console.log(`🔄 Updating product: ${req.params.id}`);
+    
+    // Try to get existing product for image cleanup, but don't fail if not found yet
+    // (updateProduct has better lookup logic)
     const existingProduct = await getProductById(req.params.id);
-
-    if (!existingProduct) {
-      return res.status(404).json({ error: "Product not found" });
-    }
+    const oldImages = existingProduct ? (existingProduct.images || []) : [];
 
     const { specs, translations, existingImages } = req.body;
     let imageUrls = existingImages ? JSON.parse(existingImages) : [];
-
-    const oldImages = existingProduct.images || [];
 
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
